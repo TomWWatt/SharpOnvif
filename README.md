@@ -187,6 +187,9 @@ Call `GetServicesAsync` to retrieve a list of all services supported by the devi
 ```cs
 var services = await client.GetServicesAsync();
 ```
+A device on older firmware answers `GetServices` with a fault. The client then finds the services
+through `GetCapabilitiesAsync`, which such a device still answers, so the calls below work either
+way.
 
 Some operations require the device to support a service. For instance, to retrieve the stream URI the device must support the media service. To check whether the Onvif service is supported by the device, call:
 ```cs

@@ -26,6 +26,8 @@ using System.Threading.Tasks;
 using SharpOnvifClient;
 using SharpOnvifClient.DeviceMgmt;
 using SharpOnvifCommon;
+using SharpOnvifCommon.Soap;
+using SharpOnvifCommon.Xml;
 
 namespace SharpOnvif.Tests
 {
@@ -213,6 +215,125 @@ namespace SharpOnvif.Tests
                 cancellation.Cancel();
 
                 await Assert.ThrowsAsync<OperationCanceledException>(() => pending);
+            }
+        }
+
+        /// <summary>A device on older firmware: GetServices faults, GetCapabilities answers.</summary>
+        private sealed class OlderFirmwareClient : SimpleOnvifClient
+        {
+            public OlderFirmwareClient() : base(Endpoint) { }
+
+            public int GetServicesCalls;
+            public int GetCapabilitiesCalls;
+
+            public override Task<GetServicesResponse> GetServicesAsync(bool includeCapability, CancellationToken cancellationToken)
+            {
+                GetServicesCalls++;
+                var fault = new SoapFault { Code = "Receiver", Reason = "Action Not Supported" };
+                fault.Subcodes.Add("ActionNotSupported");
+                throw fault.ToException();
+            }
+
+            public override Task<GetCapabilitiesResponse> GetCapabilitiesAsync(CancellationToken cancellationToken)
+            {
+                GetCapabilitiesCalls++;
+                return Task.FromResult(new GetCapabilitiesResponse
+                {
+                    Capabilities = new SharpOnvifCommon.Onvif.Capabilities
+                    {
+                        Device = new SharpOnvifCommon.Onvif.DeviceCapabilities { XAddr = Endpoint },
+                        Media = new SharpOnvifCommon.Onvif.MediaCapabilities { XAddr = "http://192.168.1.10/onvif/media" },
+                        Extension = new SharpOnvifCommon.Onvif.CapabilitiesExtension
+                        {
+                            Replay = new SharpOnvifCommon.Onvif.ReplayCapabilities { XAddr = "http://192.168.1.10/onvif/replay" },
+                        },
+                    },
+                });
+            }
+
+            public Task<string> ResolveAsync(string ns) => GetServiceUriAsync(ns, CancellationToken.None);
+        }
+
+        [TestMethod]
+        public async Task FindsTheServicesThroughGetCapabilitiesWhenGetServicesFaults()
+        {
+            // GetServices came with the second edition of the core specification. A device on
+            // older firmware faults it and answers GetCapabilities with the same addresses the
+            // older way; the fault used to take every call that needs a service address with it.
+            using (var client = new OlderFirmwareClient())
+            {
+                Assert.AreEqual("http://192.168.1.10/onvif/media", await client.ResolveAsync(OnvifServices.MEDIA));
+                Assert.AreEqual(Endpoint, await client.ResolveAsync(OnvifServices.DEVICE_MGMT));
+                Assert.AreEqual("http://192.168.1.10/onvif/replay", await client.ResolveAsync(OnvifServices.REPLAY),
+                    "the services under Extension count too");
+
+                await Assert.ThrowsExactlyAsync<NotSupportedException>(() => client.ResolveAsync(OnvifServices.PTZ));
+
+                Assert.AreEqual(1, client.GetServicesCalls, "asked once, and the answer kept");
+                Assert.AreEqual(1, client.GetCapabilitiesCalls);
+            }
+        }
+
+        /// <summary>Answers GetServices, and would notice being asked for its capabilities.</summary>
+        private sealed class CurrentFirmwareClient : SimpleOnvifClient
+        {
+            public CurrentFirmwareClient() : base(Endpoint) { }
+
+            public override Task<GetServicesResponse> GetServicesAsync(bool includeCapability, CancellationToken cancellationToken)
+            {
+                return Task.FromResult(new GetServicesResponse
+                {
+                    Service = new[] { Service(OnvifServices.MEDIA, "http://192.168.1.10/onvif/media") },
+                });
+            }
+
+            public override Task<GetCapabilitiesResponse> GetCapabilitiesAsync(CancellationToken cancellationToken)
+            {
+                throw new InvalidOperationException("GetCapabilities is the fallback, not the first choice");
+            }
+
+            public Task<string> ResolveAsync(string ns) => GetServiceUriAsync(ns, CancellationToken.None);
+        }
+
+        [TestMethod]
+        public async Task AsksForCapabilitiesOnlyWhenGetServicesFaults()
+        {
+            using (var client = new CurrentFirmwareClient())
+            {
+                Assert.AreEqual("http://192.168.1.10/onvif/media", await client.ResolveAsync(OnvifServices.MEDIA));
+            }
+        }
+
+        /// <summary>A device that cannot be reached at all.</summary>
+        private sealed class UnreachableClient : SimpleOnvifClient
+        {
+            public UnreachableClient() : base(Endpoint) { }
+
+            public int GetCapabilitiesCalls;
+
+            public override Task<GetServicesResponse> GetServicesAsync(bool includeCapability, CancellationToken cancellationToken)
+            {
+                throw new SoapTransportException("The request to " + Endpoint + " did not reach the service.");
+            }
+
+            public override Task<GetCapabilitiesResponse> GetCapabilitiesAsync(CancellationToken cancellationToken)
+            {
+                GetCapabilitiesCalls++;
+                return base.GetCapabilitiesAsync(cancellationToken);
+            }
+
+            public Task<string> ResolveAsync(string ns) => GetServiceUriAsync(ns, CancellationToken.None);
+        }
+
+        [TestMethod]
+        public async Task LetsAFailureThatIsNotAFaultThrough()
+        {
+            // Only a device that answered and said no is asked the older way. One that could not
+            // be reached would not answer that either, and the caller has to hear what happened.
+            using (var client = new UnreachableClient())
+            {
+                await Assert.ThrowsExactlyAsync<SoapTransportException>(() => client.ResolveAsync(OnvifServices.MEDIA));
+                Assert.AreEqual(0, client.GetCapabilitiesCalls);
             }
         }
     }

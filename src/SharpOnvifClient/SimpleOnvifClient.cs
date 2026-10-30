@@ -26,6 +26,7 @@ using SharpOnvifClient.PTZ;
 using SharpOnvifCommon;
 using SharpOnvifCommon.Security;
 using SharpOnvifCommon.Soap;
+using SharpOnvifCommon.Xml;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -249,6 +250,26 @@ namespace SharpOnvifClient
             var deviceClient = GetOrCreateClient(_onvifUri, u => new DeviceClient(u, _settings));
             var services = await deviceClient.GetServicesAsync(new GetServicesRequest(includeCapability), cancellationToken).ConfigureAwait(false);
             return services;
+        }
+
+        /// <summary>
+        /// Reads the device's capabilities: the older way of asking where its services live, which
+        /// a device whose firmware predates GetServices still answers. A PRE_AUTH action too.
+        /// </summary>
+        public virtual Task<GetCapabilitiesResponse> GetCapabilitiesAsync()
+        {
+            return GetCapabilitiesAsync(CancellationToken.None);
+        }
+
+        /// <remarks>
+        /// Overriding this one covers calls made with and without a token.
+        /// </remarks>
+        public virtual async Task<GetCapabilitiesResponse> GetCapabilitiesAsync(CancellationToken cancellationToken)
+        {
+            var deviceClient = GetOrCreateClient(_onvifUri, u => new DeviceClient(u, _settings));
+            var capabilities = await deviceClient.GetCapabilitiesAsync(
+                new GetCapabilitiesRequest(new[] { CapabilityCategory.All }), cancellationToken).ConfigureAwait(false);
+            return capabilities;
         }
 
         /// <summary>
@@ -810,24 +831,7 @@ namespace SharpOnvifClient
         {
             if (_supportedServices == null)
             {
-                GetServicesResponse services = await (cancellationToken.CanBeCanceled
-                    ? GetServicesAsync(false, cancellationToken)
-                    : GetServicesAsync()).ConfigureAwait(false);
-                Dictionary<string, string> supportedServices = new Dictionary<string, string>();
-                foreach (var service in services.Service)
-                {
-                    if (service == null || string.IsNullOrEmpty(service.Namespace)) continue;
-
-                    // Assigned, not added: devices do list a namespace more than once - the same
-                    // service at two versions, say - and Add would throw and take every call that
-                    // needs a service address down with it. The first address wins, which is the
-                    // one the device put first.
-                    string key = service.Namespace.ToLowerInvariant();
-                    if (!supportedServices.ContainsKey(key))
-                        supportedServices[key] = service.XAddr;
-                }
-
-                _supportedServices = supportedServices;
+                _supportedServices = await LocateServicesAsync(cancellationToken).ConfigureAwait(false);
             }
 
             string uri;
@@ -835,6 +839,87 @@ namespace SharpOnvifClient
                 return uri;
             else
                 throw new NotSupportedException($"The device does not support {ns} service!");
+        }
+
+        /// <summary>
+        /// Where the device's services live, by namespace: as GetServices lists them, or as
+        /// GetCapabilities does when the device faults GetServices.
+        /// </summary>
+        /// <remarks>
+        /// GetServices came with the second edition of the core specification. A device on older
+        /// firmware answers it with a fault, and GetCapabilities with the same addresses the older
+        /// way - so the fault used to take every call that needs a service address down with it.
+        /// </remarks>
+        private async Task<Dictionary<string, string>> LocateServicesAsync(CancellationToken cancellationToken)
+        {
+            var supportedServices = new Dictionary<string, string>();
+
+            GetServicesResponse services;
+            try
+            {
+                services = await (cancellationToken.CanBeCanceled
+                    ? GetServicesAsync(false, cancellationToken)
+                    : GetServicesAsync()).ConfigureAwait(false);
+            }
+            catch (SoapFaultException)
+            {
+                // The device answered, and said no. Anything else - unreachable, timed out,
+                // cancelled - is let through as it is: a device that did not answer GetServices
+                // is not going to answer GetCapabilities either.
+                GetCapabilitiesResponse response = await (cancellationToken.CanBeCanceled
+                    ? GetCapabilitiesAsync(cancellationToken)
+                    : GetCapabilitiesAsync()).ConfigureAwait(false);
+
+                AddCapabilities(supportedServices, response.Capabilities);
+                return supportedServices;
+            }
+
+            foreach (var service in services.Service ?? Array.Empty<Service>())
+            {
+                if (service == null || string.IsNullOrEmpty(service.Namespace)) continue;
+
+                // Assigned, not added: devices do list a namespace more than once - the same
+                // service at two versions, say - and Add would throw and take every call that
+                // needs a service address down with it. The first address wins, which is the
+                // one the device put first.
+                string key = service.Namespace.ToLowerInvariant();
+                if (!supportedServices.ContainsKey(key))
+                    supportedServices[key] = service.XAddr;
+            }
+
+            return supportedServices;
+        }
+
+        /// <summary>
+        /// The service addresses a Capabilities answer carries, under the namespaces GetServices
+        /// would list them by.
+        /// </summary>
+        private static void AddCapabilities(Dictionary<string, string> supportedServices, SharpOnvifCommon.Onvif.Capabilities capabilities)
+        {
+            if (capabilities == null) return;
+
+            AddAddress(supportedServices, OnvifServices.DEVICE_MGMT, capabilities.Device?.XAddr);
+            AddAddress(supportedServices, OnvifServices.MEDIA, capabilities.Media?.XAddr);
+            AddAddress(supportedServices, OnvifServices.EVENTS, capabilities.Events?.XAddr);
+            AddAddress(supportedServices, OnvifServices.IMAGING, capabilities.Imaging?.XAddr);
+            AddAddress(supportedServices, OnvifServices.PTZ, capabilities.PTZ?.XAddr);
+            AddAddress(supportedServices, OnvifServices.ANALYTICS, capabilities.Analytics?.XAddr);
+
+            SharpOnvifCommon.Onvif.CapabilitiesExtension extension = capabilities.Extension;
+            if (extension == null) return;
+
+            AddAddress(supportedServices, OnvifServices.DEVICE_IO, extension.DeviceIO?.XAddr);
+            AddAddress(supportedServices, OnvifServices.DISPLAY, extension.Display?.XAddr);
+            AddAddress(supportedServices, OnvifServices.RECORDING, extension.Recording?.XAddr);
+            AddAddress(supportedServices, OnvifServices.SEARCH, extension.Search?.XAddr);
+            AddAddress(supportedServices, OnvifServices.REPLAY, extension.Replay?.XAddr);
+            AddAddress(supportedServices, OnvifServices.RECEIVER, extension.Receiver?.XAddr);
+        }
+
+        private static void AddAddress(Dictionary<string, string> supportedServices, string ns, string address)
+        {
+            if (!string.IsNullOrEmpty(address))
+                supportedServices[ns.ToLowerInvariant()] = address;
         }
 
         /// <summary>
