@@ -358,6 +358,11 @@ leaves a device holding every one it asked for.
 `INonceReplayStore` has one method - it spends a nonce at a nonce count and says whether that count
 had been seen before. `MemoryNonceReplayStore`, the default, holds the record in this process.
 
+WS-UsernameToken keeps a record of its own: the nonce of every token the device accepted, for as
+long as the token's Created time stays within `WsUsernameTokenMaxTimeDeltaInMilliseconds`, so that
+a captured request cannot be sent again. It is per process too, and
+`WsUsernameTokenNonceReplayStore` moves it to a shared store the same way.
+
 ## Logging
 The client reports what it could not do through an `ILog` it is given. The logger belongs
 to the object, not to the process, so an application watching several cameras can tell which one

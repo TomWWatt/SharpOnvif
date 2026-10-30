@@ -69,6 +69,18 @@ namespace SharpOnvifServer.Security
 
         public const string ANONYMOUS_USER = "Anonymous";
 
+        /// <summary>
+        /// What <see cref="AuthenticateSoapDigestAsync"/> returns for a token whose digest holds up
+        /// but whose nonce an earlier request has already spent: a replay.
+        /// </summary>
+        public const int ERROR_WS_NONCE_REPLAYED = 2;
+
+        /// <summary>
+        /// How long a token's nonce is remembered when the clock check is switched off: the
+        /// check's own default window.
+        /// </summary>
+        private const double WS_NONCE_FALLBACK_LIFETIME_MILLISECONDS = 5 * 60 * 1000;
+
         private readonly IUserRepository _userRepository;
 
         public DigestAuthenticationHandler(
@@ -165,7 +177,8 @@ namespace SharpOnvifServer.Security
                             {
                                 try
                                 {
-                                    if (await AuthenticateSoapDigestAsync(token.UserName, token.Password, token.Nonce, token.Created).ConfigureAwait(false) == 0)
+                                    int tokenResult = await AuthenticateSoapDigestAsync(token.UserName, token.Password, token.Nonce, token.Created).ConfigureAwait(false);
+                                    if (tokenResult == 0)
                                     {
                                         UserInfo user = await _userRepository.GetUserAsync(webToken).ConfigureAwait(false);
 
@@ -173,6 +186,10 @@ namespace SharpOnvifServer.Security
                                         {
                                             return AuthenticateResult.Fail("HTTP Digest and WsUsernameToken users do not match.");
                                         }
+                                    }
+                                    else if (tokenResult == ERROR_WS_NONCE_REPLAYED)
+                                    {
+                                        return AuthenticateResult.Fail("HTTP Digest authentication succeeded, but the WsUsernameToken nonce has already been used.");
                                     }
                                     else
                                     {
@@ -227,12 +244,17 @@ namespace SharpOnvifServer.Security
                 {
                     try
                     {
-                        if (await AuthenticateSoapDigestAsync(token.UserName, token.Password, token.Nonce, token.Created).ConfigureAwait(false) == 0)
+                        int tokenResult = await AuthenticateSoapDigestAsync(token.UserName, token.Password, token.Nonce, token.Created).ConfigureAwait(false);
+                        if (tokenResult == 0)
                         {
                             var identity = new GenericIdentity(token.UserName);
                             var claimsPrincipal = new ClaimsPrincipal(identity);
                             var ticket = new AuthenticationTicket(claimsPrincipal, Scheme.Name);
                             return AuthenticateResult.Success(ticket);
+                        }
+                        else if (tokenResult == ERROR_WS_NONCE_REPLAYED)
+                        {
+                            return AuthenticateResult.Fail("WsUsernameToken nonce has already been used.");
                         }
                         else
                         {
@@ -331,6 +353,10 @@ namespace SharpOnvifServer.Security
             }
         }
 
+        /// <summary>
+        /// Checks a UsernameToken: 0 when it holds up, <see cref="ERROR_WS_NONCE_REPLAYED"/> when
+        /// it holds up but its nonce has been spent by an earlier request, and 1 otherwise.
+        /// </summary>
         public async Task<int> AuthenticateSoapDigestAsync(string userName, string digest, string nonce, string created)
         {
             var user = await _userRepository.GetUserAsync(userName).ConfigureAwait(false);
@@ -339,24 +365,56 @@ namespace SharpOnvifServer.Security
                 if (user.IsPasswordAlreadyHashed)
                     throw new NotSupportedException("WsUsernameToken is not compatible with pre-hashed (HA1) passwords.");
 
-                string calculatedDigest = WsDigestAuthentication.CreateSoapDigest(nonce, created, user.Password);                
+                string calculatedDigest = WsDigestAuthentication.CreateSoapDigest(nonce, created, user.Password);
                 DateTime createdDateTime;
 
                 // All times MUST be in UTC format as specified https://docs.oasis-open.org/wss-m/wss/v1.1.1/os/wss-SOAPMessageSecurity-v1.1.1-os.html
                 if (DateTime.TryParse(created, DateTimeFormatInfo.InvariantInfo, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out createdDateTime))
                 {
-                    if (Options.WsUsernameTokenMaxTimeDeltaInMilliseconds < 0 || 
+                    if (Options.WsUsernameTokenMaxTimeDeltaInMilliseconds < 0 ||
                         Math.Abs(DateTime.UtcNow.Subtract(createdDateTime.ToUniversalTime()).TotalMilliseconds) < Options.WsUsernameTokenMaxTimeDeltaInMilliseconds)
                     {
                         if (calculatedDigest.CompareTo(digest) == 0)
                         {
-                            return 0;
+                            // Spent last, after every other check has passed, so that a nonce is
+                            // not used up by a request that was going to be refused anyway - the
+                            // client's retry of a refused request carries the same one.
+                            return await TryUseNonceAsync(nonce, createdDateTime).ConfigureAwait(false)
+                                ? 0
+                                : ERROR_WS_NONCE_REPLAYED;
                         }
                     }
                 }
             }
 
             return 1;
+        }
+
+        /// <summary>
+        /// Spends a token's nonce, which is what stops a request captured on the wire from being
+        /// sent again. False when it has been spent before.
+        /// </summary>
+        /// <remarks>
+        /// The Created check alone leaves a captured request good for the whole of the window it
+        /// allows; the token profile has the device remember the nonces it has accepted for that
+        /// reason. A nonce is kept for as long as its token could still pass the clock check -
+        /// until Created plus the window, or now plus the window, whichever is later. When the
+        /// check is switched off nothing bounds the token, so the nonce is kept for the window's
+        /// default, which is as long as anything can be kept without growing for ever.
+        /// </remarks>
+        private Task<bool> TryUseNonceAsync(string nonce, DateTime created)
+        {
+            double windowMilliseconds = Options.WsUsernameTokenMaxTimeDeltaInMilliseconds;
+            if (windowMilliseconds < 0) windowMilliseconds = WS_NONCE_FALLBACK_LIFETIME_MILLISECONDS;
+
+            DateTimeOffset now = DateTimeOffset.UtcNow;
+            DateTimeOffset createdAt = new DateTimeOffset(created.ToUniversalTime());
+            DateTimeOffset expiresAt = (createdAt > now ? createdAt : now).AddMilliseconds(windowMilliseconds);
+
+            INonceReplayStore store = Options.WsUsernameTokenNonceReplayStore ?? WsDigestAuthentication.NonceReplayStore;
+
+            // A UsernameToken nonce has no count: it is spent once, like an RFC 2069 one.
+            return store.TryUseNonceAsync(nonce, 0, expiresAt, Context.RequestAborted);
         }
 
         private async Task<int> AuthenticateWebDigestAsync(string realm, string method, WebDigestAuth webToken, byte[] body = null)

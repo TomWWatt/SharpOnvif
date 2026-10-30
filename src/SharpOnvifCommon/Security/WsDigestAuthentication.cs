@@ -67,6 +67,30 @@ namespace SharpOnvifCommon.Security
 
     public static class WsDigestAuthentication
     {
+        private static INonceReplayStore _nonceReplayStore = new MemoryNonceReplayStore();
+
+        /// <summary>
+        /// Where the nonces of accepted UsernameTokens are remembered, process-wide. Defaults to
+        /// <see cref="MemoryNonceReplayStore"/>, which holds them in this process only - see the
+        /// remarks on <see cref="INonceReplayStore"/> for when that is not enough.
+        /// </summary>
+        /// <remarks>
+        /// Its own store rather than <see cref="HttpDigestAuthentication.NonceReplayStore"/>: an
+        /// HTTP Digest nonce is minted by the device and a UsernameToken nonce by the client, and
+        /// the two are spent on different terms.
+        /// </remarks>
+        public static INonceReplayStore NonceReplayStore
+        {
+            get { return _nonceReplayStore; }
+            set
+            {
+                if (value == null)
+                    throw new ArgumentNullException(nameof(value));
+
+                _nonceReplayStore = value;
+            }
+        }
+
         public static string CalculateNonce(int length = 32)
         {
             var byteArray = new byte[length];

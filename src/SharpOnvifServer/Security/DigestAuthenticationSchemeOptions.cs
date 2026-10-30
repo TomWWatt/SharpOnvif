@@ -63,6 +63,23 @@ namespace SharpOnvifServer.Security
         /// </summary>
         public double WsUsernameTokenMaxTimeDeltaInMilliseconds { get; set; } = 300000;
 
+        /// <summary>
+        /// Where the nonces of accepted UsernameTokens are remembered, so that a captured request
+        /// cannot be replayed while its Created time is still fresh. Left null,
+        /// <see cref="WsDigestAuthentication.NonceReplayStore"/> is used, which holds them in this
+        /// process only.
+        /// </summary>
+        /// <remarks>
+        /// The token profile has a device cache the nonces it has seen and refuse a repeat: without
+        /// that, a request captured on the wire is good for as long as
+        /// <see cref="WsUsernameTokenMaxTimeDeltaInMilliseconds"/> allows, and a client that is told
+        /// to send the token for every call sends it unencrypted. The same deployment rule as
+        /// <see cref="HttpDigestNonceReplayStore"/> applies: more than one instance behind one
+        /// address has to share a store, or a replay refused by one instance is accepted by the
+        /// next.
+        /// </remarks>
+        public INonceReplayStore WsUsernameTokenNonceReplayStore { get; set; }
+
         #endregion // WsUsernameToken
 
         #region HTTP Digest
