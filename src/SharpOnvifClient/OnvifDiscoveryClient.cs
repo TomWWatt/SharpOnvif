@@ -53,8 +53,6 @@ namespace SharpOnvifClient
         public static string OnvifDiscoveryAddressIPV4 = "239.255.255.250";
         public static string OnvifDiscoveryAddressIPV6 = "ff02::c";
 
-        private static readonly SemaphoreSlim _discoverySlim = new SemaphoreSlim(1);
-
         /// <summary>
         /// Raised when discovery could not do something on one interface. Discovery carries on -
         /// an interface that cannot carry multicast is ordinary - which is what makes these worth
@@ -172,6 +170,11 @@ namespace SharpOnvifClient
         /// <summary>
         /// Discover ONVIF devices in the local network. Sends multicast messages to all available IP network interfaces.
         /// </summary>
+        /// <remarks>
+        /// The interfaces are probed at once, so a scan takes one window however many addresses
+        /// the machine has. Each probe has a socket of its own, on a port of its own unless
+        /// <paramref name="multicastPort"/> fixes one.
+        /// </remarks>
         /// <param name="onDeviceDiscovered">Callback to be called when a new device is discovered.</param>
         /// <param name="multicastTimeout"><see cref="ONVIF_MULTICAST_TIMEOUT"/>.</param>
         /// <param name="multicastPort">Multicast port - 0 to let the OS choose any free port.</param>
@@ -244,8 +247,6 @@ namespace SharpOnvifClient
         {
             if (ipAddress == null)
                 throw new ArgumentNullException(nameof(ipAddress));
-
-            await _discoverySlim.WaitAsync();
 
             string uuid = Guid.NewGuid().ToString().ToLowerInvariant();
             string onvifDiscoveryProbe =
@@ -357,7 +358,6 @@ namespace SharpOnvifClient
             finally
             {
                 cts.Dispose();
-                _discoverySlim.Release();
             }
         }
 
