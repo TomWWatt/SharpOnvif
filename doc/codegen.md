@@ -147,6 +147,7 @@ compiling it that way.
 | `Soap/IMessageCodec.cs` | What an envelope is. |
 | `Xml/IXmlWriter.cs`, `Xml/IXmlReader.cs` | How a contract writes and reads itself, and the lexical conversions. |
 | `Soap/SoapClientBase.cs` | The base class a generated client derives from. |
+| `Soap/EndpointReference.cs` | Where a client addresses its messages, for something the service handed out. |
 | `Xml/XmlContract.cs` | The base class every generated contract derives from. |
 | `Xml/SoapFault.cs`, `Soap/SoapTransportException.cs`, `Xml/XmlNamespaceDeclaration.cs` | What a caller catches and inspects. |
 

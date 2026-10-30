@@ -410,14 +410,38 @@ namespace SharpOnvifClient
         /// The token is what ends a pull the device is still holding open, short of disposing
         /// the client.
         /// </remarks>
-        public async Task<PullMessagesResponse> PullPointPullMessagesAsync(string subscriptionReferenceAddress, int timeoutInSeconds, int maxMessages, CancellationToken cancellationToken)
+        public Task<PullMessagesResponse> PullPointPullMessagesAsync(string subscriptionReferenceAddress, int timeoutInSeconds, int maxMessages, CancellationToken cancellationToken)
+        {
+            return PullPointPullMessagesAsync(new EndpointReference(subscriptionReferenceAddress), timeoutInSeconds, maxMessages, cancellationToken);
+        }
+
+        /// <summary>
+        /// Pulls from the subscription the device handed back, addressed the way it asked.
+        /// </summary>
+        /// <remarks>
+        /// A subscription reference is more than its address: a device may put reference
+        /// parameters in it, and some devices identify the subscription by those and the
+        /// WS-Addressing headers alone, refusing a pull that arrives without them. Given the
+        /// reference rather than its address, every call on the subscription carries them.
+        /// </remarks>
+        public Task<PullMessagesResponse> PullPointPullMessagesAsync(EndpointReferenceType subscriptionReference, int timeoutInSeconds = 60, int maxMessages = 100)
+        {
+            return PullPointPullMessagesAsync(subscriptionReference, timeoutInSeconds, maxMessages, CancellationToken.None);
+        }
+
+        public Task<PullMessagesResponse> PullPointPullMessagesAsync(EndpointReferenceType subscriptionReference, int timeoutInSeconds, int maxMessages, CancellationToken cancellationToken)
+        {
+            return PullPointPullMessagesAsync(ToEndpointReference(subscriptionReference), timeoutInSeconds, maxMessages, cancellationToken);
+        }
+
+        private async Task<PullMessagesResponse> PullPointPullMessagesAsync(EndpointReference subscription, int timeoutInSeconds, int maxMessages, CancellationToken cancellationToken)
         {
             TimeSpan httpTimeout = GetPullMessagesHttpTimeout(timeoutInSeconds, _settings.Timeout);
 
             var pullPointClient = GetOrCreateClient(
-                $"{subscriptionReferenceAddress}|{(int)httpTimeout.TotalSeconds}",
-                subscriptionReferenceAddress,
-                u => new PullPointSubscriptionClient(u, WithHttpTimeout(httpTimeout)));
+                $"{subscription.Address}|{(int)httpTimeout.TotalSeconds}",
+                subscription.Address,
+                u => new PullPointSubscriptionClient(u, WithHttpTimeout(httpTimeout)) { EndpointReference = subscription });
             var messages = await pullPointClient.PullMessagesAsync(
                 new PullMessagesRequest(
                     OnvifHelpers.GetTimeoutInSeconds(timeoutInSeconds),
@@ -431,11 +455,44 @@ namespace SharpOnvifClient
             return PullPointUnsubscribeAsync(subscriptionReferenceAddress, CancellationToken.None);
         }
 
-        public async Task<UnsubscribeResponse> PullPointUnsubscribeAsync(string subscriptionReferenceAddress, CancellationToken cancellationToken)
+        public Task<UnsubscribeResponse> PullPointUnsubscribeAsync(string subscriptionReferenceAddress, CancellationToken cancellationToken)
         {
-            var pullPointClient = GetOrCreateClient(subscriptionReferenceAddress, u => new PullPointSubscriptionClient(u, _settings));
+            return PullPointUnsubscribeAsync(new EndpointReference(subscriptionReferenceAddress), cancellationToken);
+        }
+
+        public Task<UnsubscribeResponse> PullPointUnsubscribeAsync(EndpointReferenceType subscriptionReference)
+        {
+            return PullPointUnsubscribeAsync(subscriptionReference, CancellationToken.None);
+        }
+
+        public Task<UnsubscribeResponse> PullPointUnsubscribeAsync(EndpointReferenceType subscriptionReference, CancellationToken cancellationToken)
+        {
+            return PullPointUnsubscribeAsync(ToEndpointReference(subscriptionReference), cancellationToken);
+        }
+
+        private async Task<UnsubscribeResponse> PullPointUnsubscribeAsync(EndpointReference subscription, CancellationToken cancellationToken)
+        {
+            var pullPointClient = GetOrCreateClient(subscription.Address,
+                u => new PullPointSubscriptionClient(u, _settings) { EndpointReference = subscription });
             var unsubscribeResponse = await pullPointClient.UnsubscribeAsync(new UnsubscribeRequest(), cancellationToken).ConfigureAwait(false);
             return unsubscribeResponse;
+        }
+
+        /// <summary>
+        /// Where a subscription's calls go: the address the device gave, with its reference
+        /// parameters.
+        /// </summary>
+        private static EndpointReference ToEndpointReference(EndpointReferenceType subscriptionReference)
+        {
+            if (subscriptionReference == null)
+                throw new ArgumentNullException(nameof(subscriptionReference));
+
+            if (subscriptionReference.Address == null || string.IsNullOrWhiteSpace(subscriptionReference.Address.Value))
+                throw new ArgumentException("The subscription reference names no address.", nameof(subscriptionReference));
+
+            return new EndpointReference(
+                subscriptionReference.Address.Value,
+                subscriptionReference.ReferenceParameters == null ? null : subscriptionReference.ReferenceParameters.Any);
         }
 
         #endregion // Pull Point subscription
@@ -471,9 +528,29 @@ namespace SharpOnvifClient
             return BasicSubscriptionRenewAsync(subscriptionReferenceAddress, timeoutInSeconds, CancellationToken.None);
         }
 
-        public async Task<RenewResponse> BasicSubscriptionRenewAsync(string subscriptionReferenceAddress, int timeoutInSeconds, CancellationToken cancellationToken)
+        public Task<RenewResponse> BasicSubscriptionRenewAsync(string subscriptionReferenceAddress, int timeoutInSeconds, CancellationToken cancellationToken)
         {
-            var subscriptionManagerClient = GetOrCreateClient(subscriptionReferenceAddress, u => new SubscriptionManagerClient(u, _settings));
+            return BasicSubscriptionRenewAsync(new EndpointReference(subscriptionReferenceAddress), timeoutInSeconds, cancellationToken);
+        }
+
+        /// <summary>
+        /// Renews the subscription the device handed back, addressed the way it asked - see
+        /// <see cref="PullPointPullMessagesAsync(EndpointReferenceType, int, int)"/>.
+        /// </summary>
+        public Task<RenewResponse> BasicSubscriptionRenewAsync(EndpointReferenceType subscriptionReference, int timeoutInSeconds = 60)
+        {
+            return BasicSubscriptionRenewAsync(subscriptionReference, timeoutInSeconds, CancellationToken.None);
+        }
+
+        public Task<RenewResponse> BasicSubscriptionRenewAsync(EndpointReferenceType subscriptionReference, int timeoutInSeconds, CancellationToken cancellationToken)
+        {
+            return BasicSubscriptionRenewAsync(ToEndpointReference(subscriptionReference), timeoutInSeconds, cancellationToken);
+        }
+
+        private async Task<RenewResponse> BasicSubscriptionRenewAsync(EndpointReference subscription, int timeoutInSeconds, CancellationToken cancellationToken)
+        {
+            var subscriptionManagerClient = GetOrCreateClient(subscription.Address,
+                u => new SubscriptionManagerClient(u, _settings) { EndpointReference = subscription });
             var renewResult = await subscriptionManagerClient.RenewAsync(new RenewRequest()
             {
                 TerminationTime = OnvifHelpers.GetTimeoutInSeconds(timeoutInSeconds),
@@ -486,9 +563,25 @@ namespace SharpOnvifClient
             return BasicSubscriptionUnsubscribeAsync(subscriptionReferenceAddress, CancellationToken.None);
         }
 
-        public async Task<UnsubscribeResponse> BasicSubscriptionUnsubscribeAsync(string subscriptionReferenceAddress, CancellationToken cancellationToken)
+        public Task<UnsubscribeResponse> BasicSubscriptionUnsubscribeAsync(string subscriptionReferenceAddress, CancellationToken cancellationToken)
         {
-            var subscriptionManagerClient = GetOrCreateClient(subscriptionReferenceAddress, u => new SubscriptionManagerClient(u, _settings));
+            return BasicSubscriptionUnsubscribeAsync(new EndpointReference(subscriptionReferenceAddress), cancellationToken);
+        }
+
+        public Task<UnsubscribeResponse> BasicSubscriptionUnsubscribeAsync(EndpointReferenceType subscriptionReference)
+        {
+            return BasicSubscriptionUnsubscribeAsync(subscriptionReference, CancellationToken.None);
+        }
+
+        public Task<UnsubscribeResponse> BasicSubscriptionUnsubscribeAsync(EndpointReferenceType subscriptionReference, CancellationToken cancellationToken)
+        {
+            return BasicSubscriptionUnsubscribeAsync(ToEndpointReference(subscriptionReference), cancellationToken);
+        }
+
+        private async Task<UnsubscribeResponse> BasicSubscriptionUnsubscribeAsync(EndpointReference subscription, CancellationToken cancellationToken)
+        {
+            var subscriptionManagerClient = GetOrCreateClient(subscription.Address,
+                u => new SubscriptionManagerClient(u, _settings) { EndpointReference = subscription });
             var unsubscribeResult = await subscriptionManagerClient.UnsubscribeAsync(new UnsubscribeRequest(), cancellationToken).ConfigureAwait(false);
             return unsubscribeResult;
         }

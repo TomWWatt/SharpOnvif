@@ -73,6 +73,18 @@ namespace __RUNTIME__.Soap
         /// <summary>The device endpoint this client sends to.</summary>
         public string EndpointUri { get; private set; }
 
+        /// <summary>
+        /// The endpoint reference this client's messages are addressed to, or null - the default
+        /// - to send no WS-Addressing headers.
+        /// </summary>
+        /// <remarks>
+        /// Set it on a client of something the service handed out, such as a pull point
+        /// subscription: the reference the subscribe answered with says where the calls go and
+        /// what they carry, and some devices find the subscription by those headers alone. It is
+        /// read for every message, so it can be set after the client is built.
+        /// </remarks>
+        public EndpointReference EndpointReference { get; set; }
+
         /// <summary>The settings the client was created with.</summary>
         protected IClientSettings Settings { get { return _settings; } }
 
@@ -116,7 +128,10 @@ namespace __RUNTIME__.Soap
         /// <summary>
         /// Sends an operation and reads its reply into <typeparamref name="TResponse"/>.
         /// </summary>
-        /// <param name="action">SOAP action, sent in the Content-Type and as a wsa:Action header.</param>
+        /// <param name="action">
+        /// SOAP action, sent in the Content-Type and, when the client has an
+        /// <see cref="EndpointReference"/>, as a wsa:Action header.
+        /// </param>
         /// <param name="bodyNamespace">Namespace of the request's body element.</param>
         /// <param name="bodyElement">Local name of the request's body element.</param>
         /// <param name="request">The request wrapper, whose members become the body's children.</param>
@@ -165,11 +180,9 @@ namespace __RUNTIME__.Soap
 
         private string BuildEnvelope(string action, string bodyNamespace, string bodyElement, XmlContract request)
         {
-            // Null when this action carries no credentials, which is what leaves the message with
-            // no header element rather than an empty one.
-            Action<IXmlWriter> headers = _settings.Authentication == null
-                ? null
-                : _settings.Authentication.CreateSecurityHeader(action, _settings);
+            // Null when nothing goes in the header, which is what leaves the message with no
+            // header element rather than an empty one.
+            Action<IXmlWriter> headers = Headers(action);
 
             return _codec.WriteEnvelope(_settings.EnvelopePrologue, headers, writer =>
             {
@@ -177,6 +190,26 @@ namespace __RUNTIME__.Soap
                 writer.WriteContent(request);
                 writer.WriteEndElement();
             });
+        }
+
+        /// <summary>
+        /// What goes in a message's header: its addressing, when the client has an endpoint
+        /// reference, then its credentials, when the action carries any. Null when neither does.
+        /// </summary>
+        private Action<IXmlWriter> Headers(string action)
+        {
+            EndpointReference reference = EndpointReference;
+            Action<IXmlWriter> security = _settings.Authentication == null
+                ? null
+                : _settings.Authentication.CreateSecurityHeader(action, _settings);
+
+            if (reference == null) return security;
+
+            return writer =>
+            {
+                reference.WriteHeaders(writer, action);
+                if (security != null) security(writer);
+            };
         }
 
         private async Task<HttpResponseMessage> SendAsync(string action, string envelope, CancellationToken cancellationToken)

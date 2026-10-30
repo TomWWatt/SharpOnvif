@@ -178,14 +178,15 @@ public static class Program
                 continue;
             }
 
-            string address = subscription.SubscriptionReference.Address.Value;
-            Console.WriteLine($"Subscribed: {address}");
+            Console.WriteLine($"Subscribed: {subscription.SubscriptionReference.Address.Value}");
 
             try
             {
                 while (true)
                 {
-                    var messages = await client.PullPointPullMessagesAsync(address);
+                    // The whole reference, not just its address: some devices find the
+                    // subscription by the headers it puts on the call.
+                    var messages = await client.PullPointPullMessagesAsync(subscription.SubscriptionReference);
 
                     foreach (var ev in messages.NotificationMessage ?? Array.Empty<NotificationMessageHolderType>())
                     {
@@ -256,7 +257,7 @@ public static class Program
 
             try
             {
-                await client.BasicSubscriptionRenewAsync(subscriptionResponse.SubscriptionReference.Address.Value);
+                await client.BasicSubscriptionRenewAsync(subscriptionResponse.SubscriptionReference);
             }
             catch (Exception ex) when (ex is SoapTransportException || ex is SoapFaultException)
             {

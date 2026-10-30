@@ -233,13 +233,17 @@ var subscription = await client.PullPointSubscribeAsync();
 ```
 To retrieve the current notifications from the Pull Point subscription, call:
 ```cs
-var notifications = await client.PullPointPullMessagesAsync(subscription);
-foreach (var notification in notifications)
+var notifications = await client.PullPointPullMessagesAsync(subscription.SubscriptionReference);
+foreach (var notification in notifications.NotificationMessage)
 {
     // handle the notification message
     bool? isMotion = SharpOnvifClient.OnvifEvents.IsMotionDetected(notification);
 }
 ```
+Pass the subscription reference rather than its address. Every call on the subscription then
+carries the WS-Addressing headers and the reference parameters the device put in it, which some
+devices need to find the subscription at all. A generated client does the same when it is given
+an `EndpointReference`.
 
 ### Basic event subscription
 Basic event subscription utilizes a callback from the camera when an event occurs. This requires the camera to be able to reach your machine through a firewall/NAT. 
@@ -304,8 +308,7 @@ while (true)
     {
         while (true)
         {
-            var messages = await client.PullPointPullMessagesAsync(
-                subscription.SubscriptionReference.Address.Value);
+            var messages = await client.PullPointPullMessagesAsync(subscription.SubscriptionReference);
             // handle the notifications
         }
     }
