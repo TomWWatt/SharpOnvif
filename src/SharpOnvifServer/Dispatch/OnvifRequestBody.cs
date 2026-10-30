@@ -11,7 +11,8 @@ namespace SharpOnvifServer.Dispatch
     /// <para>
     /// Authentication needs it - for the action a PRE_AUTH request names in its header, for a
     /// WS-UsernameToken, for an auth-int digest - and so does the endpoint. Each used to read and
-    /// copy it again, and parse it again; the bytes are kept here for the rest of the request.
+    /// copy it again, and parse it again; the bytes are kept here for the rest of the request,
+    /// and the request's own body is consumed once they have been.
     /// </para>
     /// </summary>
     internal static class OnvifRequestBody
@@ -26,6 +27,9 @@ namespace SharpOnvifServer.Dispatch
         /// </summary>
         /// <exception cref="InvalidDataException">
         /// The body is larger than <see cref="OnvifEndpoint.MaxRequestBytes"/>.
+        /// </exception>
+        /// <exception cref="OperationCanceledException">
+        /// The client went away before all of it arrived.
         /// </exception>
         public static async Task<byte[]> ReadAsync(HttpContext context)
         {
@@ -50,29 +54,30 @@ namespace SharpOnvifServer.Dispatch
                 ReadResult read = await reader.ReadAsync(context.RequestAborted).ConfigureAwait(false);
                 ReadOnlySequence<byte> buffer = read.Buffer;
 
-                try
+                if (read.IsCompleted && buffer.Length <= maximum)
                 {
-                    if (read.IsCanceled) return null;
+                    byte[] body = buffer.ToArray();
+                    context.Items[Key] = body;
 
-                    // A chunked request declares no length, so the limit is enforced as it arrives.
-                    if (buffer.Length > maximum)
-                    {
-                        context.Items[Key] = TooLarge;
-                        throw Refused();
-                    }
-
-                    if (read.IsCompleted)
-                    {
-                        byte[] body = buffer.ToArray();
-                        context.Items[Key] = body;
-                        return body;
-                    }
+                    // Consumed, now that it is kept: everything after this reads the copy. A body
+                    // left in the pipe is one the server still has to drain when the request
+                    // ends, and on a connection the client has closed by then it reported that as
+                    // the connection ending abnormally - a warning for every pull a client
+                    // abandoned.
+                    reader.AdvanceTo(buffer.End);
+                    return body;
                 }
-                finally
+
+                // Consumed nothing, examined everything: the next read waits for more.
+                reader.AdvanceTo(buffer.Start, buffer.End);
+
+                if (read.IsCanceled) return null;
+
+                // A chunked request declares no length, so the limit is enforced as it arrives.
+                if (buffer.Length > maximum)
                 {
-                    // Consumed nothing, examined everything: the next read waits for more, and the
-                    // body is still there for anything else in the pipeline that reads it.
-                    reader.AdvanceTo(buffer.Start, buffer.End);
+                    context.Items[Key] = TooLarge;
+                    throw Refused();
                 }
             }
         }

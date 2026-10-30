@@ -73,6 +73,11 @@ namespace SharpOnvifServer.Dispatch
                 // Kept from authentication when it had to read the body, so it is read once.
                 body = await OnvifRequestBody.ReadAsync(context).ConfigureAwait(false);
             }
+            catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+            {
+                // The client went away before sending all of it.
+                return;
+            }
             catch (InvalidDataException)
             {
                 // Refused before it was read, so the size of the request is not also the size of
@@ -203,6 +208,15 @@ namespace SharpOnvifServer.Dispatch
                     : new[] { "InvalidArgVal" };
                 await WriteFaultAsync(context, "Sender", subcodes, fault.Message, OnvifErrors.Namespace,
                     System.Net.HttpStatusCode.BadRequest).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+            {
+                // The client went away while the operation was running, which is how a pull
+                // point spends most of its life: a request held open until something happens or
+                // the client gives up. The operation's token was cancelled, as it should be, and
+                // that is the end of it - not a failure of the device, so not an error in its log,
+                // and no fault, there being nobody left to read one.
+                logger?.LogDebug("Onvif operation {Action} was abandoned by the client.", UntrustedText.Printable(action));
             }
             catch (Exception error)
             {

@@ -300,8 +300,8 @@ namespace SharpOnvifServer.Security
         }
 
         /// <summary>
-        /// The request body, without consuming it, or null when there is more of it than this
-        /// endpoint would answer.
+        /// The request body, or null when there is more of it than this endpoint would answer, or
+        /// the client went away before all of it arrived.
         /// </summary>
         /// <remarks>
         /// Read to the end rather than taking whatever the first read happens to return: a body
@@ -310,8 +310,8 @@ namespace SharpOnvifServer.Security
         /// <para>
         /// Capped at what the endpoint will accept, because this runs before the endpoint does -
         /// so without a cap here, a request too large to ever be dispatched would be buffered in
-        /// full before anything refused it. Nothing is consumed either way: the endpoint still
-        /// reads the same body afterwards.
+        /// full before anything refused it. The endpoint reads the same bytes afterwards, from the
+        /// copy that is kept for the request.
         /// </para>
         /// </remarks>
         private async Task<byte[]> ReadRequestBodyAsync()
@@ -327,6 +327,11 @@ namespace SharpOnvifServer.Security
             catch (InvalidDataException)
             {
                 // Too large to be an Onvif request; the endpoint refuses it with the right status.
+                return null;
+            }
+            catch (OperationCanceledException) when (Context.RequestAborted.IsCancellationRequested)
+            {
+                // Nobody left to authenticate.
                 return null;
             }
         }
