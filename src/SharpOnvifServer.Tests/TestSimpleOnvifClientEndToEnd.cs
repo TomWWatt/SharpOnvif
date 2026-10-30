@@ -67,6 +67,7 @@ namespace SharpOnvif.Tests
                     {
                         Service(OnvifServices.DEVICE_MGMT, address),
                         Service(OnvifServices.MEDIA, address),
+                        Service(OnvifServices.MEDIA2, address),
                     },
                 };
             }
@@ -109,6 +110,27 @@ namespace SharpOnvif.Tests
                     },
                 };
             }
+
+            /// <summary>The profile the last synchronization point was asked for.</summary>
+            public static string LastSynchronizationPointToken;
+
+            public override SharpOnvifServer.Media.SetSynchronizationPointResponse SetSynchronizationPoint(string ProfileToken)
+            {
+                LastSynchronizationPointToken = ProfileToken;
+                return new SharpOnvifServer.Media.SetSynchronizationPointResponse();
+            }
+        }
+
+        /// <summary>The same device's Media 2 service, for the operations that exist on both.</summary>
+        private sealed class Media2Impl : SharpOnvifServer.Media2.Media2Base
+        {
+            public static string LastSynchronizationPointToken;
+
+            public override SharpOnvifServer.Media2.SetSynchronizationPointResponse SetSynchronizationPoint(string ProfileToken)
+            {
+                LastSynchronizationPointToken = ProfileToken;
+                return new SharpOnvifServer.Media2.SetSynchronizationPointResponse();
+            }
         }
 
         [ClassInitialize]
@@ -120,10 +142,12 @@ namespace SharpOnvif.Tests
 
             builder.Services.AddSingleton<DeviceImpl>();
             builder.Services.AddSingleton<MediaImpl>();
+            builder.Services.AddSingleton<Media2Impl>();
 
             _app = builder.Build();
             _app.MapOnvifService<DeviceImpl>(EndpointPath);
             _app.MapOnvifService<MediaImpl>(EndpointPath);
+            _app.MapOnvifService<Media2Impl>(EndpointPath);
 
             await _app.StartAsync();
 
@@ -174,6 +198,22 @@ namespace SharpOnvif.Tests
                 // rather than calling an address that does not exist.
                 await Assert.ThrowsExactlyAsync<NotSupportedException>(
                     () => client.GetStatusAsync("p0"));
+            }
+        }
+
+        [TestMethod]
+        public async Task AsksForAKeyframeOnTheProfileItIsGiven()
+        {
+            // A viewer that has just joined a stream waits for the next keyframe before it can
+            // show anything, and on a long group of pictures that is seconds. The device is asked
+            // for one now, through whichever Media service the caller is working with.
+            using (var client = new SimpleOnvifClient(_endpoint))
+            {
+                await client.SetSynchronizationPointAsync("p-media1");
+                Assert.AreEqual("p-media1", MediaImpl.LastSynchronizationPointToken, "Media 1 was not asked, or not for this profile");
+
+                await client.SetSynchronizationPoint2Async("p-media2");
+                Assert.AreEqual("p-media2", Media2Impl.LastSynchronizationPointToken, "Media 2 was not asked, or not for this profile");
             }
         }
     }

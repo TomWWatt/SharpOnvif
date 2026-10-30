@@ -330,6 +330,22 @@ namespace SharpOnvifClient
             return streamUri.MediaUri;
         }
 
+        /// <summary>
+        /// Asks the device for a keyframe on a profile, so that a viewer that has just joined the
+        /// stream starts at once instead of waiting out the group of pictures.
+        /// </summary>
+        public Task SetSynchronizationPointAsync(string profileToken)
+        {
+            return SetSynchronizationPointAsync(profileToken, CancellationToken.None);
+        }
+
+        public async Task SetSynchronizationPointAsync(string profileToken, CancellationToken cancellationToken)
+        {
+            string mediaUri = await ResolveServiceUriAsync(OnvifServices.MEDIA, cancellationToken).ConfigureAwait(false);
+            var mediaClient = GetOrCreateClient(mediaUri, u => new MediaClient(u, _settings));
+            await mediaClient.SetSynchronizationPointAsync(profileToken, cancellationToken).ConfigureAwait(false);
+        }
+
         #endregion // Media
 
         #region Media2
@@ -371,6 +387,22 @@ namespace SharpOnvifClient
             var mediaClient = GetOrCreateClient(mediaUri, u => new Media2.Media2Client(u, _settings));
             var streamUri = await mediaClient.GetSnapshotUriAsync(new Media2.GetSnapshotUriRequest(profileToken), cancellationToken).ConfigureAwait(false);
             return streamUri;
+        }
+
+        /// <summary>
+        /// Asks the device for a keyframe on a profile through Media 2 - see
+        /// <see cref="SetSynchronizationPointAsync(string)"/>.
+        /// </summary>
+        public Task SetSynchronizationPoint2Async(string profileToken)
+        {
+            return SetSynchronizationPoint2Async(profileToken, CancellationToken.None);
+        }
+
+        public async Task SetSynchronizationPoint2Async(string profileToken, CancellationToken cancellationToken)
+        {
+            string mediaUri = await ResolveServiceUriAsync(OnvifServices.MEDIA2, cancellationToken).ConfigureAwait(false);
+            var mediaClient = GetOrCreateClient(mediaUri, u => new Media2.Media2Client(u, _settings));
+            await mediaClient.SetSynchronizationPointAsync(profileToken, cancellationToken).ConfigureAwait(false);
         }
 
         #endregion // Media2

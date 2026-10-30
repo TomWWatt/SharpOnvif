@@ -197,6 +197,10 @@ if (services.Service.FirstOrDefault(x => x.Namespace == OnvifServices.MEDIA) != 
 ```
 Full list of services that can be supported by the device is available in `SharpOnvifCommon.OnvifServices`.
 
+A viewer that has just joined a stream waits for the next keyframe before it can show anything. To
+ask the device for one now, call `SetSynchronizationPointAsync(profileToken)` - or
+`SetSynchronizationPoint2Async` through Media 2.
+
 ### Delivering only what a subscriber asked for
 A client subscribing to events says which it wants, and a device that sends it everything else as
 well is not conformant. `TopicFilter` reads the filter out of the subscribe request and answers
