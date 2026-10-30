@@ -330,6 +330,11 @@ catch (SoapFaultException fault) when (fault.Fault?.Subcode == "ActionNotSupport
     // the device does not implement this operation
 }
 ```
+`StatusCode` is the HTTP status the fault came with. A device that refuses a request with a bare
+status and no fault - a 401 from one that challenges and says nothing more - raises the same
+exception with the status and no `Fault`; `IsNotAuthorized` is true for a 401 either way, so a
+wrong password is told apart from every other refusal.
+
 See `Onvif.Client` sample project for a complete example.
 
 ## Digest authentication

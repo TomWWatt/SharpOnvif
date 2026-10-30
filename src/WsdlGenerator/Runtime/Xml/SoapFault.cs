@@ -48,7 +48,10 @@ namespace __RUNTIME__.Xml
         }
     }
 
-    /// <summary>Thrown when a service answers with a SOAP fault.</summary>
+    /// <summary>
+    /// Thrown when a service answers with a SOAP fault, or refuses a request with a status and no
+    /// fault to go with it.
+    /// </summary>
     public class SoapFaultException : Exception
     {
         public SoapFaultException(string message) : base(message)
@@ -63,11 +66,25 @@ namespace __RUNTIME__.Xml
         /// <summary>The parsed fault, or null when the response was not a well-formed fault.</summary>
         public SoapFault Fault { get; private set; }
 
-        /// <summary>True when the device rejected the request for lack of valid credentials.</summary>
+        /// <summary>
+        /// The HTTP status the answer came with, or null when there was none to come with - a
+        /// fault read from somewhere other than a reply.
+        /// </summary>
+        /// <remarks>
+        /// A device refuses credentials with 401 whether or not it puts a fault in the body, and
+        /// when it does not, the status is all that says why the request was refused.
+        /// </remarks>
+        public System.Net.HttpStatusCode? StatusCode { get; protected internal set; }
+
+        /// <summary>
+        /// True when the device rejected the request for lack of valid credentials: a NotAuthorized
+        /// subcode, or a 401 with no fault to carry one.
+        /// </summary>
         public bool IsNotAuthorized
         {
             get
             {
+                if (StatusCode == System.Net.HttpStatusCode.Unauthorized) return true;
                 if (Fault == null) return false;
                 foreach (string subcode in Fault.Subcodes)
                 {

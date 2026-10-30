@@ -186,8 +186,10 @@ namespace SharpOnvifServer.Dispatch
             }
             catch (OnvifServerFaultException fault)
             {
+                // Always set by its constructor; the fallback is for a subclass that unset it.
                 await WriteFaultAsync(context, fault.Fault.Code, fault.Fault.Subcodes,
-                    fault.Fault.Reason, fault.SubcodeNamespace, fault.StatusCode).ConfigureAwait(false);
+                    fault.Fault.Reason, fault.SubcodeNamespace,
+                    fault.StatusCode ?? System.Net.HttpStatusCode.InternalServerError).ConfigureAwait(false);
             }
             catch (XmlException)
             {

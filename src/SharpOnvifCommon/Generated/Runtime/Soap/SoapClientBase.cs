@@ -144,10 +144,7 @@ namespace SharpOnvifCommon.Soap
             using (Stream stream = await ReadContentAsync(response).ConfigureAwait(false))
             {
                 TResponse result = createResponse();
-
-                // A reply carrying a fault is raised from in here, including for the 500 status
-                // code devices use to carry one.
-                _codec.ReadEnvelopeBody(stream, result, ResolveXmlType);
+                ReadReply(response, stream, result);
                 return result;
             }
         }
@@ -167,7 +164,27 @@ namespace SharpOnvifCommon.Soap
             {
                 // Nothing worth reading is not nothing worth looking at: the reply still has to be
                 // read far enough to find a fault in it.
-                _codec.ReadEnvelopeBody(stream, null, ResolveXmlType);
+                ReadReply(response, stream, null);
+            }
+        }
+
+        /// <summary>
+        /// Reads a reply's body into <paramref name="into"/>, or only far enough to find a fault
+        /// when there is nothing to read into. A fault is raised with the status it arrived under,
+        /// including the 500 devices use to carry one.
+        /// </summary>
+        private void ReadReply(HttpResponseMessage response, Stream stream, XmlContract into)
+        {
+            try
+            {
+                _codec.ReadEnvelopeBody(stream, into, ResolveXmlType);
+            }
+            catch (SoapFaultException fault)
+            {
+                // The fault is what the device said and the status is how it said it, which for
+                // a 401 whose fault names no NotAuthorized subcode is the only thing that says so.
+                if (fault.StatusCode == null) fault.StatusCode = response.StatusCode;
+                throw;
             }
         }
 
@@ -241,16 +258,24 @@ namespace SharpOnvifCommon.Soap
             // A fault comes back as a SOAP envelope with a non-success status: 400 for a
             // sender fault and 500 for a receiver one, by convention. Whenever the
             // body is SOAP, parse it so the caller gets the fault code rather than a bare status.
+            // A refusal with no SOAP in it - a 401 from a device that challenges without a fault,
+            // a page from something that is not a device - is raised with the status, which is
+            // all it carries that a caller can act on.
             if (!response.IsSuccessStatusCode && !IsSoap(response))
             {
                 string body = response.Content == null
                     ? string.Empty
                     : await response.Content.ReadAsStringAsync().ConfigureAwait(false);
 
+                System.Net.HttpStatusCode status = response.StatusCode;
+                string reason = response.ReasonPhrase;
                 response.Dispose();
                 throw new SoapFaultException(
-                    "The device returned HTTP " + (int)response.StatusCode + " " + response.ReasonPhrase +
-                    (body.Length == 0 ? "." : ": " + Truncate(body, 512)));
+                    "The device returned HTTP " + (int)status + " " + reason +
+                    (body.Length == 0 ? "." : ": " + Truncate(body, 512)))
+                {
+                    StatusCode = status,
+                };
             }
 
             return response;
